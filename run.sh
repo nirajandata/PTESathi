@@ -1,1 +1,2 @@
-g++ -std=c++17 -pthread main.cpp -lcrow -ljwt -lcrypto -o auth_server
+g++ -std=c++23 -lpthread main.cpp -ljwt -lcrypto -lsqlite3 -o auth_server
+
