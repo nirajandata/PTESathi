@@ -1,121 +1,137 @@
 #include <crow.h>
-#include <ctime>
+#include <cstring>
 #include <jwt-cpp/jwt.h>
-#include <map>
-#include <string>
+#include <sqlite3.h>
 
-struct User {
-  std::string username;
-  std::string password;
-  std::string email;
-};
-
-struct JwtMiddleware : crow::ILocalMiddleware {
-  struct context {
-    User user;
-  };
-
-  std::map<std::string, User> users;
-  std::string secret_key = "your_256_bit_secret";
-
-  void before_handle(crow::request &req, crow::response &res, context &ctx) {
-    auto auth_header = req.get_header_value("Authorization");
-    if (auth_header.empty()) {
-      res.code = 401;
-      res.write("Authorization header missing");
-      res.end();
-      return;
-    }
-
-    try {
-      auto token = auth_header.substr(7);
-      auto decoded = jwt::decode(token);
-      jwt::verify()
-          .allow_algorithm(jwt::algorithm::hs256{secret_key})
-          .verify(decoded);
-
-      auto username = decoded.get_payload_claim("username").as_string();
-      if (users.find(username) == users.end()) {
-        res.code = 401;
-        res.write("Invalid user");
-        res.end();
-        return;
-      }
-
-      ctx.user = users[username];
-    } catch (const std::exception &e) {
-      res.code = 401;
-      res.write(std::string("Invalid token: ") + e.what());
-      res.end();
-    }
-  }
-
-  void after_handle(crow::request &, crow::response &, context &) {}
-};
+#include "Database.h"
+#include "JWT.h"
 
 int main() {
-  crow::App<JwtMiddleware> app;
+  crow::App app;
 
-  // Capture app by reference in lambdas
+  Database db{"auth.db"};
+
   CROW_ROUTE(app, "/auth/signup")
-      .methods("POST"_method)([&app](const crow::request &req) {
+      .methods("POST"_method)([&db](const crow::request &req) {
         auto body = crow::json::load(req.body);
         if (!body || !body.has("username") || !body.has("password") ||
             !body.has("email")) {
-          return crow::response(400, "Missing fields");
+          return JsonResponse::error(
+              400, "Missing required fields: username, password, and email");
         }
 
-        std::string username = body["username"].s();
-        auto &users = app.template get_middleware<JwtMiddleware>().users;
+        try {
+          std::string username = body["username"].s();
+          std::string password = body["password"].s();
+          std::string email = body["email"].s();
 
-        if (users.find(username) != users.end()) {
-          return crow::response(409, "User already exists");
+          if (!auth_utils::is_valid_username(username)) {
+            return JsonResponse::error(400, "Invalid username format");
+          }
+
+          if (!auth_utils::is_valid_email(email)) {
+            return JsonResponse::error(400, "Invalid email format");
+          }
+
+          if (!auth_utils::is_strong_password(password)) {
+            return JsonResponse::error(
+                400, "Password does not meet security requirements");
+          }
+
+          if (db.userExists(username)) {
+            return JsonResponse::error(409, "Username already exists");
+          }
+
+          if (db.emailExists(email)) {
+            return JsonResponse::error(409, "Email already exists");
+          }
+
+          std::string salt = auth_utils::generate_salt();
+          std::string password_hash = auth_utils::hash_password(password, salt);
+
+          User new_user{username, password_hash, salt, email};
+          db.addUser(new_user);
+
+          return JsonResponse::success(201, "User created successfully");
+        } catch (const std::exception &e) {
+          return JsonResponse::error(500, std::string("Error: ") + e.what());
         }
-
-        users[username] =
-            User{username, body["password"].s(), body["email"].s()};
-
-        return crow::response(201, "User created");
       });
 
   CROW_ROUTE(app, "/auth/login")
-      .methods("POST"_method)([&app](const crow::request &req) {
+      .methods("POST"_method)([&db](const crow::request &req) {
         auto body = crow::json::load(req.body);
         if (!body || !body.has("username") || !body.has("password")) {
-          return crow::response(400, "Missing fields");
+          return JsonResponse::error(400, "Missing username or password");
         }
 
-        auto &users = app.template get_middleware<JwtMiddleware>().users;
-        std::string username = body["username"].s();
+        try {
+          std::string username = body["username"].s();
+          std::string password = body["password"].s();
 
-        if (users.find(username) == users.end() ||
-            users[username].password != body["password"].s()) {
-          return crow::response(401, "Invalid credentials");
+          if (!db.userExists(username)) {
+            return JsonResponse::error(401, "Invalid credentials");
+          }
+
+          User user = db.getUser(username);
+          std::string hashed_password =
+              auth_utils::hash_password(password, user.salt);
+
+          if (user.password_hash != hashed_password) {
+            return JsonResponse::error(401, "Invalid credentials");
+          }
+
+          std::string secret_key = Config::getInstance().getJwtSecretKey();
+          int expiration_hours = Config::getInstance().getJwtExpirationHours();
+
+          auto token =
+              jwt::create()
+                  .set_issuer("auth_service")
+                  .set_type("JWS")
+                  .set_payload_claim("username", jwt::claim(user.username))
+                  .set_issued_at(std::chrono::system_clock::now())
+                  .set_expires_at(std::chrono::system_clock::now() +
+                                  std::chrono::hours(expiration_hours))
+                  .sign(jwt::algorithm::hs256{secret_key});
+
+          crow::json::wvalue response;
+          response["token"] = token;
+          response["expiresIn"] = expiration_hours * 3600;
+          return JsonResponse::success(200, response);
+        } catch (const std::exception &e) {
+          return JsonResponse::error(401, "Invalid credentials");
         }
-
-        auto token = jwt::create()
-                         .set_issuer("auth0")
-                         .set_type("JWS")
-                         .set_payload_claim("username", jwt::claim(username))
-                         .set_issued_at(std::chrono::system_clock::now())
-                         .set_expires_at(std::chrono::system_clock::now() +
-                                         std::chrono::hours(1))
-                         .sign(jwt::algorithm::hs256{"your_256_bit_secret"});
-
-        crow::json::wvalue response;
-        response["token"] = token;
-        return crow::response{response};
       });
 
   CROW_ROUTE(app, "/auth/me")
-      .methods("GET"_method)
-      .CROW_MIDDLEWARES(app, JwtMiddleware)([&app](const crow::request &req) {
-        auto &ctx = app.template get_context<JwtMiddleware>(req);
-        crow::json::wvalue response;
-        response["username"] = ctx.user.username;
-        response["email"] = ctx.user.email;
-        return crow::response{response};
+      .methods("GET"_method)([&db](const crow::request &req) {
+        try {
+          auto auth_header = req.get_header_value("Authorization");
+          if (auth_header.empty() || auth_header.substr(0, 7) != "Bearer ") {
+            return JsonResponse::error(
+                401, "Missing or invalid authorization header");
+          }
+
+          std::string token = auth_header.substr(7);
+          User user = validate_jwt(token, db);
+
+          crow::json::wvalue user_data;
+          user_data["username"] = user.username;
+          user_data["email"] = user.email;
+
+          return JsonResponse::success(200, user_data);
+        } catch (const std::exception &e) {
+          return JsonResponse::error(
+              401, std::string("Authentication failed: ") + e.what());
+        }
       });
 
+  CROW_ROUTE(app, "/meow").methods("GET"_method)([]() {
+    crow::json::wvalue response;
+    response["status"] = "meow meow test";
+    return crow::response(response);
+  });
+
   app.port(8080).multithreaded().run();
+  return 0;
 }
