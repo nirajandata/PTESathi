@@ -1,7 +1,10 @@
+#include "env.h"
 #include <curl/curl.h>
 #include <fstream>
 #include <iostream>
 #include <string>
+
+#include "env.h"
 
 // Callback to write the audio data to a file
 size_t writeData(void *ptr, size_t size, size_t nmemb, void *userdata) {
@@ -12,11 +15,6 @@ size_t writeData(void *ptr, size_t size, size_t nmemb, void *userdata) {
 }
 
 int main() {
-  const std::string subscriptionKey =
-      R"(1qMMEPmQXHsrwp5MbfB4XS4C3egHeF2AILapOYYvPXKbfMDyYAJNJQQJ99BEACYeBjFXJ3w3AAAYACOGQwPk)";
-  const std::string region = "eastus";
-  const std::string url =
-      "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1";
 
   std::string content = "my voice is my passport verify me";
 
@@ -35,7 +33,8 @@ int main() {
 
   struct curl_slist *headers = nullptr;
   headers = curl_slist_append(
-      headers, ("Ocp-Apim-Subscription-Key: " + subscriptionKey).c_str());
+      headers, ("Ocp-Apim-Subscription-Key: " + SUBSCRIPTION_KEY).data());
+
   headers = curl_slist_append(headers, "Content-Type: application/ssml+xml");
   headers = curl_slist_append(
       headers, "X-Microsoft-OutputFormat: audio-16khz-128kbitrate-mono-mp3");
@@ -47,7 +46,7 @@ int main() {
     return 1;
   }
 
-  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_URL, URL.data());
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POST, 1L);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, ssml.c_str());
