@@ -14,16 +14,18 @@ size_t writeData(void *ptr, size_t size, size_t nmemb, void *userdata) {
 int main() {
   const std::string subscriptionKey =
       R"(1qMMEPmQXHsrwp5MbfB4XS4C3egHeF2AILapOYYvPXKbfMDyYAJNJQQJ99BEACYeBjFXJ3w3AAAYACOGQwPk)";
-  const std::string region = "eastus"; // e.g., eastus
+  const std::string region = "eastus";
   const std::string url =
       "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1";
 
-  const std::string ssml = R"(
-<speak version='1.0' xml:lang='en-US'>
-    <voice xml:lang='en-US' xml:gender='Female' name='en-US-AvaMultilingualNeural'>
-        my voice is my passport verify me
-    </voice>
-</speak>)";
+  std::string content = "my voice is my passport verify me";
+
+  std::string ssml = "<speak version='1.0' xml:lang='en-US'>"
+                     "<voice xml:lang='en-US' xml:gender='Female' "
+                     "name='en-US-AvaMultilingualNeural'>" +
+                     content +
+                     "</voice>"
+                     "</speak>";
 
   CURL *curl = curl_easy_init();
   if (!curl) {
